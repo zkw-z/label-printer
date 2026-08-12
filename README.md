@@ -4,6 +4,13 @@ Amazon FBA 卖家标签打印工作流工具 — 一站式 Excel 解析 → PDF 
 
 ---
 
+## 📥 下载
+
+- **Windows 便携版 exe（免安装，双击即用）**：[点击下载最新版](https://github.com/zkw-z/label-printer/releases/latest)
+- 历史版本：[Releases 页面](https://github.com/zkw-z/label-printer/releases)
+
+---
+
 ## 一、功能优点
 
 ### 1. 智能格式识别
