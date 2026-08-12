@@ -1,0 +1,43 @@
+[project]
+name = "label-printer"
+version = "1.2.1"
+description = "亚马逊 FBA 卖家标签打印工作流工具"
+requires-python = ">=3.10"
+dependencies = [
+    "openpyxl>=3.1.0",
+    "xlrd>=2.0.0",
+    "pypdfium2>=4.30.0",
+    "Pillow>=10.0.0",
+    "pywin32>=306",
+    "PyMuPDF>=1.24.0",
+    "pikepdf>=9.0.0",
+    "reportlab>=4.0.0",
+    "loguru>=0.7.0",
+    "pydantic>=2.0.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes
+    "W",      # pycodestyle warnings
+    "I",      # isort (import sorting)
+    "B",      # flake8-bugbear
+    "SIM",    # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "B008",   # do not perform function calls in argument defaults
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "models", "services", "ui"]

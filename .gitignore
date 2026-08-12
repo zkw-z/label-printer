@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 构建产物
+build/
+dist/
+
+# PyInstaller spec（保留主 spec 用于打包）
+*.spec
+!标签打印工具.spec
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 日志
+logs/
+*.log
+
+# 本地数据与环境（含业务数据，勿提交到公开仓库）
+*.db
+recent_files.json
+printer_config.json
+tessdata/
+_user_meta.json
+
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 临时文件
+*.tmp
+*.temp

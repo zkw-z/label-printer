@@ -1,0 +1,5 @@
+"""常量定义模块"""
+
+from .label_constants import TRANSPARENT_KEYWORDS, SPECIAL_NOTE_KEYWORDS
+
+__all__ = ["TRANSPARENT_KEYWORDS", "SPECIAL_NOTE_KEYWORDS"]
