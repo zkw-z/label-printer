@@ -52,8 +52,26 @@ except Exception:
 
 # 10-13位字母数字组合，二次过滤只保留疑似FNSKU
 _FNSKU_RE = re.compile(r"[A-Z0-9]{10,13}")
+# 宽松匹配：容忍字符间插入空格（如 "X00 1C40HN3"），带边界防止与相邻文字粘连
+_FNSKU_RE_LOOSE = re.compile(
+    r"(?<![A-Z0-9])X\s*0\s*0\s*[A-Z0-9](?:\s*[A-Z0-9]){6,9}?(?![A-Z0-9])"
+)
 # 已知的Amazon FNSKU常见前缀
 _FNSKU_PREFIXES = ("X00", "B0")
+
+
+def _loose_fnsku_matches(text):
+    """逐行宽松匹配 FNSKU（容忍字符间插入空格），返回去空格后的编码列表。
+
+    逐行匹配可避免 FNSKU 与相邻行/相邻词粘连成更长的字母数字串。
+    """
+    results: list[str] = []
+    for line in text.splitlines():
+        for m in _FNSKU_RE_LOOSE.findall(line):
+            code = re.sub(r"\s+", "", m)
+            if code not in results:
+                results.append(code)
+    return results
 
 
 def _clean_desc(desc):
@@ -129,8 +147,12 @@ def _extract_description(lines, start_idx):
         line = lines[j].strip()
         if not line:
             continue  # 跳过空行
-        # 碰到下一个FNSKU或条码行则停止
-        if _FNSKU_RE.fullmatch(line) or re.match(r"^\*[\d ]+\*$", line):
+        # 碰到下一个FNSKU或条码行则停止（FNSKU 行可能带空格，如 "X00 1C40HN3"）
+        if (
+            _FNSKU_RE.fullmatch(line)
+            or _FNSKU_RE.fullmatch(re.sub(r"\s+", "", line))
+            or re.match(r"^\*[\d ]+\*$", line)
+        ):
             break
         # 过滤 TCPDF 签名
         if "tcpdf" in line.lower():
@@ -165,8 +187,10 @@ def _extract_fnsku_from_filename(filename):
 
 
 def _extract_fnsku_from_ocr(text):
-    """从 OCR 文本中提取 FNSKU"""
+    """从 OCR 文本中提取 FNSKU（容忍字符间插入空格）"""
     matches = _FNSKU_RE.findall(text)
+    if not matches:
+        matches = _loose_fnsku_matches(text)
     for code in matches:
         if _is_likely_fnsku(code):
             return code
@@ -196,8 +220,8 @@ def _try_ocr_page(png_path, filename):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         desc_lines = []
         for line in lines:
-            # 跳过包含文件名FNSKU的行
-            if fnsku in line:
+            # 跳过包含文件名FNSKU的行（容忍 FNSKU 中插入空格）
+            if fnsku in line or fnsku in re.sub(r"\s+", "", line):
                 continue
             # 跳过看起来像FNSKU的行（X00/B0开头），避免OCR误读
             if _is_likely_fnsku(line.split()[0] if line.split() else ""):
@@ -247,6 +271,11 @@ def process_pdf(pdf_path, png_dir, file_index, dpi):
             ordered_text = "\n".join(b[4] for b in blocks if b[4].strip())
 
             matches = _FNSKU_RE.findall(ordered_text)
+            loose = False
+            if not matches:
+                # FNSKU 文本层可能被插入空格（如 "X00 1C40HN3"），宽松匹配重试
+                matches = _loose_fnsku_matches(ordered_text)
+                loose = bool(matches)
             if not matches:
                 continue
 
@@ -259,9 +288,9 @@ def process_pdf(pdf_path, png_dir, file_index, dpi):
                     continue
                 seen_on_page.add(fnsku)
 
-                # 定位FNSKU所在行
+                # 定位FNSKU所在行（宽松模式下先对行去空白再比对）
                 for i, line in enumerate(lines):
-                    if fnsku in line:
+                    if fnsku in (re.sub(r"\s+", "", line) if loose else line):
                         desc = _extract_description(lines, i)
                         if desc:
                             desc = _clean_desc(desc)

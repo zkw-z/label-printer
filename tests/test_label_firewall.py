@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import tkinter.messagebox as tkmb
+
+import pytest
+
 from models.excel_data import ExcelData
 from services.label_firewall import (
     SPECIAL_NOTE_KEYWORDS,
@@ -13,6 +17,12 @@ from services.label_firewall import (
 def _make_excel_data(rows: list[dict]) -> ExcelData:
     """构造模拟的 ExcelData"""
     return ExcelData(rows=rows)
+
+
+@pytest.fixture(autouse=True)
+def _no_messagebox(monkeypatch):
+    """单元测试中不弹真实的 tkinter 模态弹窗（会阻塞等待人工点击）。"""
+    monkeypatch.setattr(tkmb, "showwarning", lambda *args, **kwargs: None)
 
 
 class TestLabelFirewall:

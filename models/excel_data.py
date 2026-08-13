@@ -518,23 +518,36 @@ def _match_columns(
 
     Returns:
         {标准字段: 列索引} 字典。未匹配的字段不在其中。
+
+    匹配策略（修复：SKU 误配到"对应SKU标识"列）：
+      1. 第一轮：候选词与表头"完全相等"才命中（如 "SKU" 只匹配列名 "SKU"）。
+      2. 第二轮：全部列精确匹配失败后，回退到"子串包含"匹配，兼容旧文件。
     """
     col_idx: dict[str, int] = {}
 
-    for std_name, candidates in mapping.items():
-        for col_i, header in enumerate(headers):
-            if not header:
-                continue
-            # 规范化列名（合并换行符等空白字符）
-            normalized = _normalize_header(header)
-            for candidate in candidates:
-                # AND 关系：规范化后的所有子串都必须出现在规范化 header 中
-                if all(_normalize_header(sub) in normalized for sub in candidate):
-                    col_idx[std_name] = col_i
-                    break
+    def _scan(sub_match: bool) -> None:
+        for std_name, candidates in mapping.items():
             if std_name in col_idx:
-                break
+                continue
+            for col_i, header in enumerate(headers):
+                if not header:
+                    continue
+                # 规范化列名（合并换行符等空白字符）
+                normalized = _normalize_header(header)
+                for candidate in candidates:
+                    subs = [_normalize_header(sub) for sub in candidate]
+                    if sub_match:
+                        hit = all(s in normalized for s in subs)
+                    else:
+                        hit = all(s == normalized for s in subs)
+                    if hit:
+                        col_idx[std_name] = col_i
+                        break
+                if std_name in col_idx:
+                    break
 
+    _scan(sub_match=False)  # 精确匹配优先
+    _scan(sub_match=True)   # 子串包含兜底
     return col_idx
 
 
