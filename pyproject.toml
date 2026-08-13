@@ -1,6 +1,6 @@
 [project]
 name = "label-printer"
-version = "1.2.2"
+version = "1.2.3"
 description = "亚马逊 FBA 卖家标签打印工作流工具"
 requires-python = ">=3.10"
 dependencies = [

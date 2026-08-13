@@ -361,7 +361,8 @@ def extract_copies_from_item_no(text: str | None) -> tuple[int, str]:
     匹配模式（支持阿拉伯数字 + 中文数字）：
       - "FBA每箱贴 N 张"   → 份数 = N
       - "每箱贴 N 张"       → 份数 = N
-      - 无匹配时回退取最后一个数字（低置信度）
+      - 无匹配时返回 0，由调用方默认为 1 张
+        （不回退取最后一个数字，避免把单号/日期等误当份数）
 
     Returns:
         (份数, 来源描述)
@@ -383,13 +384,8 @@ def extract_copies_from_item_no(text: str | None) -> tuple[int, str]:
         n = _parse_num(m.group(1))
         return n, f"item no. → 每箱贴{n}张"
 
-    # 回退：取文本中最后一个数字（低置信度）
-    digits = re.findall(rf"({_CN_NUM_PAT})", s)
-    if digits:
-        n = _parse_num(digits[-1])
-        return n, f"item no. → 回退提取数字 {n}（请确认）"
-
-    return 0, "item no. 中无数字"
+    # 未找到明确的"贴N张"信息：返回 0，由调用方默认为 1 张
+    return 0, "未找到FBA贴N张，份数默认为1"
 
 
 def extract_sku_qty_from_item_no(text: str | None) -> int:
@@ -967,7 +963,6 @@ class ExcelLoader:
                 last[col] = ""
 
         parsed: list[dict[str, Any]] = []
-        copies_warnings: list[str] = []
 
         for r_idx in range(header_idx + 1, len(rows_raw)):
             cells = list(rows_raw[r_idx])
@@ -1007,6 +1002,9 @@ class ExcelLoader:
             current_mark = str(_raw_box).strip() if _raw_box is not None else ""
             if current_mark and current_mark != str(last.get("箱唛", "")).strip():
                 last["贴标顺序"] = ""
+                if copies_source == "item_no":
+                    # 份数按箱唛重置，防止上一箱唛的份数泄漏到无份数信息的新箱唛
+                    last["份数"] = 0
             for col in ffill_columns:
                 val = item.get(col)
                 if val is not None and str(val).strip() != "":
@@ -1034,13 +1032,15 @@ class ExcelLoader:
                     raw = cells[item_no_col]
                 elif notes_col is not None and notes_col < len(cells):
                     raw = cells[notes_col]
+                copies = 0
                 if raw is not None and str(raw).strip() != "":
-                    copies, desc = extract_copies_from_item_no(raw)
+                    copies, _ = extract_copies_from_item_no(raw)
+                if copies > 0:
                     last["份数"] = copies
-                    # 只记录一次警告（重复太多）
-                    if "回退" in desc and desc not in copies_warnings:
-                        copies_warnings.append(f"箱唛 '{str(last.get('箱唛', ''))}': {desc}")
-                item["份数"] = last.get("份数", 0)
+                elif last.get("份数", 0) <= 0:
+                    # 指示中没有份数，或备注中没有找到 FBA贴N张：默认为 1 张
+                    last["份数"] = 1
+                item["份数"] = last["份数"]
 
             # ── 份数提取（自定义格式：份数列 → 备注列 → 默认 1）──
             if copies_source == "custom":
