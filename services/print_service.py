@@ -131,6 +131,65 @@ class PrintService:
             w, h = PrintService.get_printer_page_size_mm(printer_name)
             return [("默认", w, h)]
 
+    # ─── 居中定位 ─────────────────────────────────────────────
+
+    @staticmethod
+    def _compute_centered_origin(
+        target_w: int,
+        target_h: int,
+        printable_w: int,
+        printable_h: int,
+        phys_w: int,
+        phys_h: int,
+        off_x: int,
+        off_y: int,
+    ) -> tuple[int, int, int, int, int, int]:
+        """计算物理纸张居中的绘制参数（纯计算，便于测试）。
+
+        Args:
+            target_w/h: 标签目标像素尺寸（按 width_mm × DPI 换算）。
+            printable_w/h: 可打印区域尺寸（HORZRES / VERTRES）。
+            phys_w/h: 物理纸张尺寸（PHYSICALWIDTH / PHYSICALHEIGHT），
+                      无法获取时传 0，自动用可打印区域推断。
+            off_x/y: 可打印区域左上角在物理纸上的位置
+                     （PHYSICALOFFSETX / PHYSICALOFFSETY）。
+
+        Returns:
+            (draw_x, draw_y, draw_w, draw_h, crop_left, crop_top)
+            draw_*: GDI 页面坐标（可打印区域左上角为原点）下的绘制
+                    位置与尺寸；crop_left/top: 图片需要裁剪掉的像素
+                    （超出可打印区域时保持内容对称）。
+        """
+        # 1) 标签大于可打印区域时先等比缩小，保证完整打印
+        fit = min(1.0, printable_w / target_w, printable_h / target_h)
+        fit_w = max(1, int(target_w * fit))
+        fit_h = max(1, int(target_h * fit))
+
+        # 2) 以物理纸张中心为基准定位（物理纸坐标系原点在纸张左上角）
+        if phys_w > 0 and phys_h > 0:
+            center_x = phys_w / 2
+            center_y = phys_h / 2
+        else:
+            # 回退：物理纸尺寸不可用时，用 偏移+可打印区 推断
+            center_x = (off_x + printable_w) / 2
+            center_y = (off_y + printable_h) / 2
+
+        # 物理纸坐标 → GDI 页面坐标（原点=可打印区左上角）
+        draw_x = int(round(center_x - fit_w / 2 - off_x))
+        draw_y = int(round(center_y - fit_h / 2 - off_y))
+
+        # 3) 超出可打印区域的像素裁剪量（两侧对称裁剪）
+        crop_left = max(0, -draw_x)
+        crop_top = max(0, -draw_y)
+        crop_right = max(0, draw_x + fit_w - printable_w)
+        crop_bottom = max(0, draw_y + fit_h - printable_h)
+
+        draw_x = max(0, draw_x)
+        draw_y = max(0, draw_y)
+        draw_w = fit_w - crop_left - crop_right
+        draw_h = fit_h - crop_top - crop_bottom
+        return draw_x, draw_y, draw_w, draw_h, crop_left, crop_top
+
     # ─── 图片打印 ──────────────────────────────────────────────
 
     def print_image(
@@ -163,6 +222,15 @@ class PrintService:
             page_w = hdc.GetDeviceCaps(win32con.HORZRES)
             page_h = hdc.GetDeviceCaps(win32con.VERTRES)
 
+            # 物理纸张参数（个别驱动不支持时回退 0 → 用可打印区域推断）
+            try:
+                phys_w = hdc.GetDeviceCaps(win32con.PHYSICALWIDTH)
+                phys_h = hdc.GetDeviceCaps(win32con.PHYSICALHEIGHT)
+                off_x = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETX)
+                off_y = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETY)
+            except Exception:
+                phys_w = phys_h = off_x = off_y = 0
+
             if job.width_mm and job.height_mm:
                 target_w = int(job.width_mm * dpi_x / 25.4)
                 target_h = int(job.height_mm * dpi_y / 25.4)
@@ -177,8 +245,35 @@ class PrintService:
                 # 等比缩放居中（不变形，白底填充）
                 image = fit_to_size(image, target_w, target_h)
 
+                # 物理纸张居中绘制（消除打印机可打印区域原点偏移）
+                (
+                    draw_x,
+                    draw_y,
+                    draw_w,
+                    draw_h,
+                    crop_left,
+                    crop_top,
+                ) = PrintService._compute_centered_origin(
+                    target_w,
+                    target_h,
+                    page_w,
+                    page_h,
+                    phys_w,
+                    phys_h,
+                    off_x,
+                    off_y,
+                )
+
+                # 缩小 / 裁剪到可打印区域内，保持内容对称
+                if (draw_w, draw_h) != (target_w, target_h):
+                    image = image.resize((draw_w, draw_h), Image.Resampling.BICUBIC)
+                if crop_left or crop_top:
+                    image = image.crop(
+                        (crop_left, crop_top, crop_left + draw_w, crop_top + draw_h)
+                    )
+
                 dib = ImageWin.Dib(image)
-                dib.draw(hdc.GetSafeHdc(), (0, 0, target_w, target_h))
+                dib.draw(hdc.GetSafeHdc(), (draw_x, draw_y, draw_x + draw_w, draw_y + draw_h))
             else:
                 # 自适应页面
                 img_w, img_h = image.size
@@ -198,8 +293,31 @@ class PrintService:
                     new_w = int(img_w * fit)
                     new_h = int(img_h * fit)
 
+                # 自适应页面同样以物理纸张中心定位
+                (
+                    draw_x,
+                    draw_y,
+                    _dw,
+                    _dh,
+                    crop_left,
+                    crop_top,
+                ) = PrintService._compute_centered_origin(
+                    new_w,
+                    new_h,
+                    page_w,
+                    page_h,
+                    phys_w,
+                    phys_h,
+                    off_x,
+                    off_y,
+                )
+                if crop_left or crop_top:
+                    image = image.crop(
+                        (crop_left, crop_top, crop_left + new_w, crop_top + new_h)
+                    )
+
                 dib = ImageWin.Dib(image)
-                dib.draw(hdc.GetSafeHdc(), (0, 0, new_w, new_h))
+                dib.draw(hdc.GetSafeHdc(), (draw_x, draw_y, draw_x + new_w, draw_y + new_h))
 
             hdc.EndPage()
             hdc.EndDoc()
@@ -213,6 +331,7 @@ class PrintService:
                     hdc.DeleteDC()
                 except Exception:
                     pass
+
 
     # ─── PDF 渲染 ─────────────────────────────────────────────
 
