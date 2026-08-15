@@ -24,6 +24,10 @@ from services.label_firewall import check_firewall
 from services.pdf_renderer import PdfRenderer
 from services.print_service import PrintJob, PrintService
 
+# SKU 打印内容缩放：解决部分打印机输出贴纸边的问题（四周留白）
+SKU_PRINT_SCALE: float = 0.97
+
+
 # ─── 数据结构 ────────────────────────────────────────────────
 
 
@@ -554,6 +558,7 @@ class WorkflowService:
                 orientation=self.state.sku_orientation,
                 width_mm=self.state.sku_width,
                 height_mm=self.state.sku_height,
+                scale=SKU_PRINT_SCALE,
             )
             for _ in range(qty):
                 ok, msg = self.print_service.print_image(pil_image, job)
@@ -604,6 +609,7 @@ class WorkflowService:
             orientation=self.state.sku_orientation,
             width_mm=self.state.sku_width,
             height_mm=self.state.sku_height,
+            scale=SKU_PRINT_SCALE,
         )
         for _ in range(qty):
             ok, msg = self.print_service.print_image(pil_image, job)
