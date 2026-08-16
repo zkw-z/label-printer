@@ -1,8 +1,7 @@
 """打印机设置对话框
 
-FBA 模式下提供打印机 + 方向 + 纸张大小下拉列表（类似 Word 打印界面）。
+FBA / SKU 模式均提供打印机 + 方向 + 纸张大小下拉列表（类似 Word 打印界面）。
 纸张列表从打印机驱动通过 DeviceCapabilities 自动获取。
-SKU 模式保持手动输入不变。
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ class SettingsDialog:
         self._fetch_page_size = fetch_page_size
         self._fetch_forms = fetch_forms
 
-        h = 300 if self._is_fba else 200
+        h = 320
 
         win = tk.Toplevel(parent)
         win.title(f"设置 - {type_label}")
@@ -70,12 +69,12 @@ class SettingsDialog:
         width_var = tk.StringVar(value=str(current_width))
         height_var = tk.StringVar(value=str(current_height))
 
-        if self._is_fba and fetch_forms:
-            _build_fba_forms_section(
+        if fetch_forms:
+            _build_forms_section(
                 win, printer_var, width_var, height_var, fetch_forms, fetch_page_size,
                 current_width, current_height,
             )
-        elif self._is_fba and fetch_page_size:
+        elif fetch_page_size:
             _build_fba_single_section(win, printer_var, width_var, height_var, fetch_page_size)
         else:
             _build_manual_size_section(win, width_var, height_var)
@@ -113,10 +112,10 @@ class SettingsDialog:
         win.geometry(f"+{x}+{y}")
 
 
-# ── FBA 纸张下拉列表（Word 风格）──────────────────────────────────
+# ── 纸张下拉列表（Word 风格，FBA / SKU 共用）──────────────────────
 
 
-def _build_fba_forms_section(
+def _build_forms_section(
     win: tk.Toplevel,
     printer_var: tk.StringVar,
     width_var: tk.StringVar,
@@ -126,7 +125,7 @@ def _build_fba_forms_section(
     current_width: int,
     current_height: int,
 ) -> None:
-    """构建 FBA 纸张大小下拉列表（Combobox）区域。"""
+    """构建纸张大小下拉列表（Combobox）区域，FBA / SKU 共用。"""
 
     tk.Frame(win, height=8).pack()
 

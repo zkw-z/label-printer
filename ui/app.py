@@ -346,12 +346,9 @@ class LabelPrinterApp:
             )
             cfg.save(CONFIG_FILE)
 
-        # 构建 FBA 纸张列表获取回调
-        fetch_size = None
-        fetch_forms = None
-        if type_ == "FBA":
-            fetch_size = self.print_service.get_printer_page_size_mm
-            fetch_forms = self.print_service.get_printer_forms
+        # 构建纸张列表获取回调（FBA / SKU 共用）
+        fetch_size = self.print_service.get_printer_page_size_mm
+        fetch_forms = self.print_service.get_printer_forms
 
         SettingsDialog(
             self.root, printers,
