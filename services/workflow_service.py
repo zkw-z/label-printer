@@ -24,6 +24,10 @@ from services.label_firewall import check_firewall
 from services.pdf_renderer import PdfRenderer
 from services.print_service import PrintJob, PrintService
 
+# FBA 打印内容缩放：与 SKU 一致，解决部分打印机输出贴纸边的问题（四周留白）
+FBA_PRINT_SCALE: float = 0.97
+
+
 # SKU 打印内容缩放：解决部分打印机输出贴纸边的问题（四周留白）
 SKU_PRINT_SCALE: float = 0.97
 
@@ -304,7 +308,7 @@ class WorkflowService:
             success, result = self.pdf_renderer.render_page_scaled(
                 str(self.pdf_mapper.fba_path),
                 page_num,
-                content_scale=self.state.fba_scale,
+                content_scale=FBA_PRINT_SCALE,
             )
             if not success:
                 render_failures.append(str(page_num))
@@ -388,7 +392,7 @@ class WorkflowService:
                     success, result = self.pdf_renderer.render_page_scaled(
                         str(self.pdf_mapper.fba_path) if self.pdf_mapper.fba_path else "",
                         page_num,
-                        content_scale=self.state.fba_scale,
+                        content_scale=FBA_PRINT_SCALE,
                     )
                     if not success:
                         render_failures.append(str(page_num))
