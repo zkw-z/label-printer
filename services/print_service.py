@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import ctypes
+
 import win32con  # type: ignore[import-untyped]
 import win32print  # type: ignore[import-untyped]
 import win32ui  # type: ignore[import-untyped]
@@ -36,6 +38,72 @@ class PrintJob:
     height_mm: int = 100
     scale: float = 1.0
     copies: int = 1
+
+
+# ── DEVMODE 结构（ctypes 定义，用于设置打印纸张）──────────────
+
+
+class _DevModeW(ctypes.Structure):
+    """Windows DEVMODEW 结构（公共部分，与 dmSize=220 对应）。"""
+
+    _fields_ = [
+        ("dmDeviceName", ctypes.c_wchar * 32),
+        ("dmSpecVersion", ctypes.c_ushort),
+        ("dmDriverVersion", ctypes.c_ushort),
+        ("dmSize", ctypes.c_ushort),
+        ("dmDriverExtra", ctypes.c_ushort),
+        ("dmFields", ctypes.c_uint),
+        ("dmOrientation", ctypes.c_short),
+        ("dmPaperSize", ctypes.c_short),
+        ("dmPaperLength", ctypes.c_short),
+        ("dmPaperWidth", ctypes.c_short),
+        ("dmScale", ctypes.c_short),
+        ("dmCopies", ctypes.c_short),
+        ("dmDefaultSource", ctypes.c_short),
+        ("dmPrintQuality", ctypes.c_short),
+        ("dmColor", ctypes.c_short),
+        ("dmDuplex", ctypes.c_short),
+        ("dmYResolution", ctypes.c_short),
+        ("dmTTOption", ctypes.c_short),
+        ("dmCollate", ctypes.c_short),
+        ("dmFormName", ctypes.c_wchar * 32),
+        ("dmLogPixels", ctypes.c_ushort),
+        ("dmBitsPerPel", ctypes.c_uint),
+        ("dmPelsWidth", ctypes.c_uint),
+        ("dmPelsHeight", ctypes.c_uint),
+        ("dmDisplayFlags", ctypes.c_uint),
+        ("dmDisplayFrequency", ctypes.c_uint),
+        ("dmICMMethod", ctypes.c_uint),
+        ("dmICMIntent", ctypes.c_uint),
+        ("dmMediaType", ctypes.c_uint),
+        ("dmDitherType", ctypes.c_uint),
+        ("dmReserved1", ctypes.c_uint),
+        ("dmReserved2", ctypes.c_uint),
+        ("dmPanningWidth", ctypes.c_uint),
+        ("dmPanningHeight", ctypes.c_uint),
+    ]
+
+
+def _build_custom_paper_devmode(width_mm: int, height_mm: int) -> _DevModeW:
+    """构建自定义纸张 DEVMODE（dmPaperWidth/dmPaperLength，0.1mm 单位）。"""
+    dm = _DevModeW()
+    dm.dmSize = ctypes.sizeof(_DevModeW)
+    dm.dmFields = win32con.DM_PAPERWIDTH | win32con.DM_PAPERLENGTH
+    dm.dmPaperWidth = int(width_mm * 10)
+    dm.dmPaperLength = int(height_mm * 10)
+    return dm
+
+
+def _reset_dc_paper(hdc_value: int, dm) -> int:
+    """调用 GDI ResetDCW 应用 DEVMODE（win32ui 未暴露 ResetDC）。
+
+    Returns:
+        新 DC 句柄；失败返回 0。
+    """
+    gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)
+    gdi32.ResetDCW.argtypes = [ctypes.c_void_p, ctypes.POINTER(_DevModeW)]
+    gdi32.ResetDCW.restype = ctypes.c_void_p
+    return int(gdi32.ResetDCW(hdc_value, ctypes.byref(dm)) or 0)
 
 
 class PrintService:
@@ -131,66 +199,47 @@ class PrintService:
             w, h = PrintService.get_printer_page_size_mm(printer_name)
             return [("默认", w, h)]
 
-    # ─── 居中定位 ─────────────────────────────────────────────
+    # ─── 纸张尺寸应用 ──────────────────────────────────────────
 
     @staticmethod
-    def _compute_centered_origin(
-        target_w: int,
-        target_h: int,
-        printable_w: int,
-        printable_h: int,
-        phys_w: int,
-        phys_h: int,
-        off_x: int,
-        off_y: int,
-    ) -> tuple[int, int, int, int, int, int]:
-        """计算物理纸张居中的绘制参数（纯计算，便于测试）。
+    def _apply_paper_size(
+        printer: str, width_mm: int, height_mm: int, hdc
+    ) -> None:
+        """把设置中的纸张尺寸通过 DEVMODE 应用到当前打印 DC。
 
-        Args:
-            target_w/h: 标签目标像素尺寸（按 width_mm × DPI 换算）。
-            printable_w/h: 可打印区域尺寸（HORZRES / VERTRES）。
-            phys_w/h: 物理纸张尺寸（PHYSICALWIDTH / PHYSICALHEIGHT），
-                      无法获取时传 0，自动用可打印区域推断。
-            off_x/y: 可打印区域左上角在物理纸上的位置
-                     （PHYSICALOFFSETX / PHYSICALOFFSETY）。
-
-        Returns:
-            (draw_x, draw_y, draw_w, draw_h, crop_left, crop_top)
-            draw_*: GDI 页面坐标（可打印区域左上角为原点）下的绘制
-                    位置与尺寸；crop_left/top: 图片需要裁剪掉的像素
-                    （超出可打印区域时保持内容对称）。
+        使用 dmPaperWidth / dmPaperLength（0.1mm 单位）设置自定义纸张，
+        是标签打印机的标准做法；仅影响本次打印任务，不改系统默认。
+        失败时仅记录警告，回退使用打印机当前纸张。
         """
-        # 1) 标签大于可打印区域时先等比缩小，保证完整打印
-        fit = min(1.0, printable_w / target_w, printable_h / target_h)
-        fit_w = max(1, int(target_w * fit))
-        fit_h = max(1, int(target_h * fit))
+        if not width_mm or not height_mm:
+            return
+        # 虚拟 PDF 打印机（Microsoft Print to PDF / WPS PDF 等）对自定义
+        # 纸张支持异常，跳过设置，保持其默认页面（仅作测试输出用）
+        _virtual_keywords = (
+            "pdf", "wps", "print to pdf", "one note", "onenote", "xps", "fax",
+        )
+        if any(k in printer.lower() for k in _virtual_keywords):
+            return
+        try:
+            dm = _build_custom_paper_devmode(width_mm, height_mm)
+            hval = int(hdc.GetSafeHdc()) & 0xFFFFFFFF
+            result = _reset_dc_paper(hval, dm)
+            if not result:
+                logger.warning(
+                    f"应用纸张尺寸 {width_mm}×{height_mm}mm 失败，"
+                    f"使用打印机当前纸张。"
+                )
+                return
+            logger.info(
+                f"已应用纸张尺寸: {width_mm}×{height_mm}mm → {printer}"
+            )
+        except Exception:
+            logger.warning(
+                f"应用纸张尺寸 {width_mm}×{height_mm}mm 异常，"
+                f"使用打印机当前纸张。"
+            )
 
-        # 2) 以物理纸张中心为基准定位（物理纸坐标系原点在纸张左上角）
-        if phys_w > 0 and phys_h > 0:
-            center_x = phys_w / 2
-            center_y = phys_h / 2
-        else:
-            # 回退：物理纸尺寸不可用时，用 偏移+可打印区 推断
-            center_x = (off_x + printable_w) / 2
-            center_y = (off_y + printable_h) / 2
-
-        # 物理纸坐标 → GDI 页面坐标（原点=可打印区左上角）
-        draw_x = int(round(center_x - fit_w / 2 - off_x))
-        draw_y = int(round(center_y - fit_h / 2 - off_y))
-
-        # 3) 超出可打印区域的像素裁剪量（两侧对称裁剪）
-        crop_left = max(0, -draw_x)
-        crop_top = max(0, -draw_y)
-        crop_right = max(0, draw_x + fit_w - printable_w)
-        crop_bottom = max(0, draw_y + fit_h - printable_h)
-
-        draw_x = max(0, draw_x)
-        draw_y = max(0, draw_y)
-        draw_w = fit_w - crop_left - crop_right
-        draw_h = fit_h - crop_top - crop_bottom
-        return draw_x, draw_y, draw_w, draw_h, crop_left, crop_top
-
-    # ─── 图片打印 ──────────────────────────────────────────────
+    # ─── 图片打印 ───    # ─── 图片打印 ──────────────────────────────────────────────
 
     def print_image(
         self,
@@ -214,6 +263,9 @@ class PrintService:
             hdc = win32ui.CreateDC()
             hdc.CreatePrinterDC(job.printer)
 
+            # 把设置中的纸张尺寸真正应用到本次打印任务（DEVMODE 自定义纸张）
+            self._apply_paper_size(job.printer, job.width_mm, job.height_mm, hdc)
+
             hdc.StartDoc("Label Print Job")
             hdc.StartPage()
 
@@ -221,15 +273,6 @@ class PrintService:
             dpi_y = hdc.GetDeviceCaps(win32con.LOGPIXELSY)
             page_w = hdc.GetDeviceCaps(win32con.HORZRES)
             page_h = hdc.GetDeviceCaps(win32con.VERTRES)
-
-            # 物理纸张参数（个别驱动不支持时回退 0 → 用可打印区域推断）
-            try:
-                phys_w = hdc.GetDeviceCaps(win32con.PHYSICALWIDTH)
-                phys_h = hdc.GetDeviceCaps(win32con.PHYSICALHEIGHT)
-                off_x = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETX)
-                off_y = hdc.GetDeviceCaps(win32con.PHYSICALOFFSETY)
-            except Exception:
-                phys_w = phys_h = off_x = off_y = 0
 
             if job.width_mm and job.height_mm:
                 target_w = int(job.width_mm * dpi_x / 25.4)
@@ -243,37 +286,14 @@ class PrintService:
                     target_w, target_h = target_h, target_w
 
                 # 等比缩放居中（不变形，白底填充）
-                image = fit_to_size(image, target_w, target_h)
-
-                # 物理纸张居中绘制（消除打印机可打印区域原点偏移）
-                (
-                    draw_x,
-                    draw_y,
-                    draw_w,
-                    draw_h,
-                    crop_left,
-                    crop_top,
-                ) = PrintService._compute_centered_origin(
-                    target_w,
-                    target_h,
-                    page_w,
-                    page_h,
-                    phys_w,
-                    phys_h,
-                    off_x,
-                    off_y,
-                )
-
-                # 缩小 / 裁剪到可打印区域内，保持内容对称
-                if (draw_w, draw_h) != (target_w, target_h):
-                    image = image.resize((draw_w, draw_h), Image.Resampling.BICUBIC)
-                if crop_left or crop_top:
-                    image = image.crop(
-                        (crop_left, crop_top, crop_left + draw_w, crop_top + draw_h)
-                    )
+                # 纸张设置生效后，可打印区可能小于目标尺寸（打印机硬件边距），
+                # 等比缩放到可打印区内，避免内容被边缘裁剪
+                draw_w = min(target_w, page_w)
+                draw_h = min(target_h, page_h)
+                image = fit_to_size(image, draw_w, draw_h)
 
                 dib = ImageWin.Dib(image)
-                dib.draw(hdc.GetSafeHdc(), (draw_x, draw_y, draw_x + draw_w, draw_y + draw_h))
+                dib.draw(hdc.GetSafeHdc(), (0, 0, draw_w, draw_h))
             else:
                 # 自适应页面
                 img_w, img_h = image.size
@@ -293,31 +313,8 @@ class PrintService:
                     new_w = int(img_w * fit)
                     new_h = int(img_h * fit)
 
-                # 自适应页面同样以物理纸张中心定位
-                (
-                    draw_x,
-                    draw_y,
-                    _dw,
-                    _dh,
-                    crop_left,
-                    crop_top,
-                ) = PrintService._compute_centered_origin(
-                    new_w,
-                    new_h,
-                    page_w,
-                    page_h,
-                    phys_w,
-                    phys_h,
-                    off_x,
-                    off_y,
-                )
-                if crop_left or crop_top:
-                    image = image.crop(
-                        (crop_left, crop_top, crop_left + new_w, crop_top + new_h)
-                    )
-
                 dib = ImageWin.Dib(image)
-                dib.draw(hdc.GetSafeHdc(), (draw_x, draw_y, draw_x + new_w, draw_y + new_h))
+                dib.draw(hdc.GetSafeHdc(), (0, 0, new_w, new_h))
 
             hdc.EndPage()
             hdc.EndDoc()
@@ -331,7 +328,6 @@ class PrintService:
                     hdc.DeleteDC()
                 except Exception:
                     pass
-
 
     # ─── PDF 渲染 ─────────────────────────────────────────────
 
