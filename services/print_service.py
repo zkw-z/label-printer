@@ -268,56 +268,57 @@ class PrintService:
             self._apply_paper_size(job.printer, job.width_mm, job.height_mm, hdc)
 
             hdc.StartDoc("Label Print Job")
-            for _ in range(copies):
-                hdc.StartPage()
 
-                dpi_x = hdc.GetDeviceCaps(win32con.LOGPIXELSX)
-                dpi_y = hdc.GetDeviceCaps(win32con.LOGPIXELSY)
-                page_w = hdc.GetDeviceCaps(win32con.HORZRES)
-                page_h = hdc.GetDeviceCaps(win32con.VERTRES)
+            dpi_x = hdc.GetDeviceCaps(win32con.LOGPIXELSX)
+            dpi_y = hdc.GetDeviceCaps(win32con.LOGPIXELSY)
+            page_w = hdc.GetDeviceCaps(win32con.HORZRES)
+            page_h = hdc.GetDeviceCaps(win32con.VERTRES)
 
-                if job.width_mm and job.height_mm:
-                    target_w = int(job.width_mm * dpi_x / 25.4)
-                    target_h = int(job.height_mm * dpi_y / 25.4)
+            # 图像变换（缩放/旋转/居中）只执行一次，
+            # 避免同一任务多份打印时逐页累积缩放（第N张变成 scale^N）
+            if job.width_mm and job.height_mm:
+                target_w = int(job.width_mm * dpi_x / 25.4)
+                target_h = int(job.height_mm * dpi_y / 25.4)
 
-                    if job.scale < 1.0:
-                        image = scale_image(image, job.scale)
+                if job.scale < 1.0:
+                    image = scale_image(image, job.scale)
 
-                    if job.orientation == "landscape" and target_w < target_h:
-                        image = image.rotate(90, expand=True)
-                        target_w, target_h = target_h, target_w
+                if job.orientation == "landscape" and target_w < target_h:
+                    image = image.rotate(90, expand=True)
+                    target_w, target_h = target_h, target_w
 
-                    # 等比缩放居中（不变形，白底填充）
-                    # 纸张设置生效后，可打印区可能小于目标尺寸（打印机硬件边距），
-                    # 等比缩放到可打印区内，避免内容被边缘裁剪
-                    draw_w = min(target_w, page_w)
-                    draw_h = min(target_h, page_h)
-                    image = fit_to_size(image, draw_w, draw_h)
+                # 等比缩放居中（不变形，白底填充）
+                # 纸张设置生效后，可打印区可能小于目标尺寸（打印机硬件边距），
+                # 等比缩放到可打印区内，避免内容被边缘裁剪
+                draw_w = min(target_w, page_w)
+                draw_h = min(target_h, page_h)
+                image = fit_to_size(image, draw_w, draw_h)
+                draw_box = (0, 0, draw_w, draw_h)
+            else:
+                # 自适应页面
+                img_w, img_h = image.size
+                scale_x = page_w / img_w
+                scale_y = page_h / img_h
+                fit = min(scale_x, scale_y)
 
-                    dib = ImageWin.Dib(image)
-                    dib.draw(hdc.GetSafeHdc(), (0, 0, draw_w, draw_h))
-                else:
-                    # 自适应页面
+                new_w = int(img_w * fit)
+                new_h = int(img_h * fit)
+
+                if job.orientation == "landscape" and new_w < new_h:
+                    image = image.rotate(90, expand=True)
                     img_w, img_h = image.size
                     scale_x = page_w / img_w
                     scale_y = page_h / img_h
                     fit = min(scale_x, scale_y)
-
                     new_w = int(img_w * fit)
                     new_h = int(img_h * fit)
 
-                    if job.orientation == "landscape" and new_w < new_h:
-                        image = image.rotate(90, expand=True)
-                        img_w, img_h = image.size
-                        scale_x = page_w / img_w
-                        scale_y = page_h / img_h
-                        fit = min(scale_x, scale_y)
-                        new_w = int(img_w * fit)
-                        new_h = int(img_h * fit)
+                draw_box = (0, 0, new_w, new_h)
 
-                    dib = ImageWin.Dib(image)
-                    dib.draw(hdc.GetSafeHdc(), (0, 0, new_w, new_h))
-
+            for _ in range(copies):
+                hdc.StartPage()
+                # 每页新建 Dib，避免跨页复用 GDI 位图对象
+                ImageWin.Dib(image).draw(hdc.GetSafeHdc(), draw_box)
                 hdc.EndPage()
             hdc.EndDoc()
             return True, "打印成功"
