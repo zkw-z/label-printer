@@ -230,9 +230,6 @@ class PrintService:
                     f"使用打印机当前纸张。"
                 )
                 return
-            logger.info(
-                f"已应用纸张尺寸: {width_mm}×{height_mm}mm → {printer}"
-            )
         except Exception:
             logger.warning(
                 f"应用纸张尺寸 {width_mm}×{height_mm}mm 异常，"
