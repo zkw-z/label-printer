@@ -31,6 +31,9 @@ FBA_PRINT_SCALE: float = 0.97
 # SKU 打印内容缩放：解决部分打印机输出贴纸边的问题（四周留白）
 SKU_PRINT_SCALE: float = 0.97
 
+# 单个打印任务的最大份数：超过时分批发送（避免个别驱动对超大页数任务处理异常）
+MAX_COPIES_PER_JOB: int = 500
+
 
 # ─── 数据结构 ────────────────────────────────────────────────
 
@@ -544,6 +547,12 @@ class WorkflowService:
             compound_key = item.get("复合键", str(item["SKU"]))
             sku = str(item["SKU"])
             qty = int(item["SKU数量"])
+            if qty <= 0:
+                logger.error(
+                    f"红色警报：箱唛 '{mark}' 的 SKU '{compound_key}' "
+                    f"数量为 0，跳过打印（请检查 SKU数量 列）。"
+                )
+                continue
             sticker_order = str(item.get("贴标顺序", "")).strip()
             if not sticker_order:
                 sticker_order = last_sticker_order
@@ -555,7 +564,7 @@ class WorkflowService:
                 logger.warning(f"警告：数据库和当前 PDF 中均未找到 SKU '{compound_key}'。跳过。")
                 continue
 
-            # 打印 SKU 标签
+            # 打印 SKU 标签（一次任务多份，超过阈值分批发送）
             logger.info(f"正在打印 SKU: {compound_key} x {qty}")
             job = PrintJob(
                 printer=self.state.sku_printer,
@@ -564,11 +573,14 @@ class WorkflowService:
                 height_mm=self.state.sku_height,
                 scale=SKU_PRINT_SCALE,
             )
-            for _ in range(qty):
-                ok, msg = self.print_service.print_image(pil_image, job)
+            remaining = qty
+            while remaining > 0:
+                batch = min(remaining, MAX_COPIES_PER_JOB)
+                ok, msg = self.print_service.print_image(pil_image, job, copies=batch)
                 if not ok:
                     logger.warning(msg)
                     return
+                remaining -= batch
 
             # 打印贴标顺序（每个 SKU 后都跟一次，含数量+标识）
             if sticker_order:
@@ -602,6 +614,12 @@ class WorkflowService:
             logger.warning("错误：缺少 SKU。")
             return
 
+        if qty <= 0:
+            logger.error(
+                f"红色警报：SKU '{sku}' 数量为 0，无法打印（请检查数量输入）。"
+            )
+            return
+
         pil_image = self._load_sku_image(sku, plain_sku=sku)
         if pil_image is None:
             logger.error(f"错误：数据库和当前 PDF 中均未找到 SKU '{sku}'。")
@@ -615,11 +633,14 @@ class WorkflowService:
             height_mm=self.state.sku_height,
             scale=SKU_PRINT_SCALE,
         )
-        for _ in range(qty):
-            ok, msg = self.print_service.print_image(pil_image, job)
+        remaining = qty
+        while remaining > 0:
+            batch = min(remaining, MAX_COPIES_PER_JOB)
+            ok, msg = self.print_service.print_image(pil_image, job, copies=batch)
             if not ok:
                 logger.warning(msg)
                 return
+            remaining -= batch
         logger.success("单个打印完成。")
 
     # ─── 内部 ──────────────────────────────────────────────────

@@ -930,7 +930,8 @@ class ExcelLoader:
             if col == "份数":
                 last[col] = 0
             elif col == "SKU数量":
-                last[col] = 1
+                # 无 SKU数量 列时默认 0（打印时红色警报跳过）；有列时空单元格沿用前值或 1
+                last[col] = 1 if "SKU数量" in col_idx else 0
             else:
                 last[col] = ""
 
