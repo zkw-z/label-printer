@@ -5,8 +5,8 @@
 
 支持三种格式：
   1. 标准指示文件（旧格式）：固定 8 列标题
-  2. 客户原始派送表（新格式）：自动字段映射，份数 / SKU数量 从 item no. 提取
-  3. 单票贴标指示表：含"贴标操作要求"列，份数 / SKU数量 从备注列提取
+  2. 客户原始派送表（新格式）：自动字段映射，份数 从 item no. 提取，SKU数量 从 総数量/总数量/SKU数量 列读取
+  3. 单票贴标指示表：含"贴标操作要求"列，份数 从备注列提取，SKU数量 从 FNSKU总枚数 列读取
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ DELIVERY_COLUMN_MAPPING: dict[str, list[list[str]]] = {
     "FBA番号": [["FBA番号"], ["FBA编号"], ["FBA号"], ["FBA#"], ["FBA货箱编号"]],
     "箱数": [["箱数"], ["(CTNS)"], ["操作箱数"]],
     "SKU": [["SKU"], ["更新FNSKU"]],
-    "SKU数量": [["総数量"], ["总数量"], ["数量"]],
+    "SKU数量": [["総数量"], ["总数量"], ["SKU数量"]],  # 不用泛义"数量"列
     "贴标顺序": [["贴标顺序"], ["标签顺序"], ["对应的外箱标识"], ["外箱标识"]],
     "份数": [["份数"], ["每箱贴标"], ["打印份数"], ["Copies"]],  # 备选独立列
     "FBA仓库编码": [["FBA仓库"], ["FBA 仓"], ["仓库编码"], ["仓库代码"]],
@@ -388,33 +388,6 @@ def extract_copies_from_item_no(text: str | None) -> tuple[int, str]:
     return 0, "未找到FBA贴N张，份数默认为1"
 
 
-def extract_sku_qty_from_item_no(text: str | None) -> int:
-    """从 item no. / 备注列文本中提取该 SKU 的每箱数量。
-
-    匹配模式（支持阿拉伯数字 + 中文数字）：
-      - "SKU:N张"   → SKU数量 = N
-      - "SKU每个贴N张" → SKU数量 = N
-
-    Returns:
-        SKU数量，默认 1。
-    """
-    if not text:
-        return 1
-
-    s = str(text)
-
-    # SKU:N张 / SKU每箱贴N张 / SKU每个贴N张
-    # 两段匹配，避免 .*? 跨越 "两张" 跑到 FBA 描述去
-    m = re.search(rf"SKU\s*[:：]\s*({_CN_NUM_PAT})\s*张", s)
-    if m:
-        return _parse_num(m.group(1))
-    m = re.search(rf"SKU\s*每[个箱]\s*[贴貼]\s*({_CN_NUM_PAT})\s*张", s)
-    if m:
-        return _parse_num(m.group(1))
-
-    return 1  # 默认每箱 1 个该 SKU
-
-
 # ─── FBA 编号清洗 ────────────────────────────────────────────────
 
 
@@ -696,13 +669,12 @@ class FieldMapper:
 
         # 确定份数和 SKU 数量的来源
         copies_source = "column" if "份数" in col_idx else "item_no"
-        sku_qty_source = "column" if "SKU数量" in col_idx else "item_no"
+        # SKU数量 仅从列读取；无 SKU数量 列时固定默认 1（不从 item no. 提取）
+        sku_qty_source = "column"
 
         warnings: list[str] = []
         if copies_source == "item_no":
             warnings.append("份数将自动从 item no. 列提取（'FBA每箱贴N张'）")
-        if sku_qty_source == "item_no":
-            warnings.append("SKU数量将自动从 item no. 列提取（'SKU:N张'），默认 1")
 
         return {
             "format": "delivery",
@@ -1058,19 +1030,6 @@ class ExcelLoader:
                 if copies <= 0:
                     copies = 1
                 item["份数"] = copies
-
-            # ── SKU 数量提取（从 item no. / 备注列）──
-            if sku_qty_source == "item_no":
-                # SKU 数量不跨 ffill（不同 SKU 可能不同数量）
-                sku_qty = 1
-                raw = None
-                if item_no_col is not None and item_no_col < len(cells):
-                    raw = cells[item_no_col]
-                elif notes_col is not None and notes_col < len(cells):
-                    raw = cells[notes_col]
-                if raw is not None and str(raw).strip() != "":
-                    sku_qty = extract_sku_qty_from_item_no(raw)
-                item["SKU数量"] = sku_qty
 
             parsed.append(item)
 
